@@ -15,12 +15,12 @@ namespace ecm_wrapper
         public const int EC_MAX_STRING_LENGTH = 64;
         public const int EC_MAX_PORTS = 4;
         public const int EC_COE_EMERGENCY_MSG_SIZE = 8;
-        
+
         public static uint ECRT_VERSION(int major, int minor) => (uint)((major << 8) + minor);
         public static uint ECRT_VERSION_MAGIC => ECRT_VERSION(ECRT_VER_MAJOR, ECRT_VER_MINOR);
-        
+
         public static ulong EC_TIMEVAL2NANO(TimeSpan timespan) =>
-            (ulong)((timespan.Ticks / TimeSpan.TicksPerSecond - 946684800L) * 1000000000L + 
+            (ulong)((timespan.Ticks / TimeSpan.TicksPerSecond - 946684800L) * 1000000000L +
                    (timespan.Ticks % TimeSpan.TicksPerSecond) / TimeSpan.TicksPerMicrosecond * 1000L); //funzt die wirklich?
     }
 
@@ -83,7 +83,7 @@ namespace ecm_wrapper
     {
         public uint slaves_responding;
         private uint _flags;
-        
+
         public uint al_states => _flags & 0xF;
         public bool link_up => (_flags & 0x10) != 0;
     }
@@ -93,7 +93,7 @@ namespace ecm_wrapper
     {
         public uint slaves_responding;
         private uint _flags;
-        
+
         public uint al_states => _flags & 0xF;
         public bool link_up => (_flags & 0x10) != 0;
     }
@@ -102,7 +102,7 @@ namespace ecm_wrapper
     public struct EcSlaveConfigState
     {
         private uint _flags;
-        
+
         public bool online => (_flags & 0x1) != 0;
         public bool operational => (_flags & 0x2) != 0;
         public uint al_state => (_flags >> 2) & 0xF;
@@ -115,7 +115,7 @@ namespace ecm_wrapper
         private uint _flags;
         public byte scan_busy;
         public ulong app_time;
-        
+
         public bool link_up => (_flags & 0x1) != 0;
     }
 
@@ -154,15 +154,15 @@ namespace ecm_wrapper
         public uint serial_number;
         public ushort alias;
         public short current_on_ebus;
-        
+
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = EcrtConstants.EC_MAX_PORTS)]
         public EcSlavePortInfo[] ports;
-        
+
         public byte al_state;
         public byte error_flag;
         public byte sync_count;
         public ushort sdo_count;
-        
+
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = EcrtConstants.EC_MAX_STRING_LENGTH)]
         public string name;
     }
@@ -199,6 +199,20 @@ namespace ecm_wrapper
         public uint n_pdos;
         public IntPtr pdos; // EcPdoInfo*
         public EcWatchdogMode watchdog_mode;
+
+        public EcSyncInfo(byte index, EcDirection dir, uint n_pdos = 0, IntPtr pdos = 0, EcWatchdogMode watchdog_mode = 0)
+        {
+            this.index = index;
+            this.dir = dir;
+            this.n_pdos = n_pdos;
+            this.pdos = pdos;
+            this.watchdog_mode = watchdog_mode;
+        }
+
+        public static EcSyncInfo ReturnTerminator()
+        {
+            return new EcSyncInfo(0xFF, EcDirection.EC_DIR_INVALID);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -441,6 +455,17 @@ namespace ecm_wrapper
 
         #endregion
 
+        // Add these methods to the EcrtNative class in the Slave Configuration Methods region
+        #region Slave Configuration Methods (additions)
+
+        [DllImport(ECRT_LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int ecrt_slave_config_state_request(IntPtr sc, EcAlState state);
+
+        [DllImport(ECRT_LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int ecrt_master_slave_state_request(IntPtr master, ushort slave_position, EcAlState state);
+
+        #endregion
+
         #region Domain Methods
 
         [DllImport(ECRT_LIB, CallingConvention = CallingConvention.Cdecl)]
@@ -598,7 +623,7 @@ namespace ecm_wrapper
             var masterPtr = EcrtNative.ecrt_open_master(masterIndex);
             if (masterPtr == IntPtr.Zero)
                 throw new InvalidOperationException($"Failed to open master {masterIndex}");
-            
+
             var master = new EcMaster();
             master._masterPtr = masterPtr;
             return master;
@@ -803,6 +828,152 @@ namespace ecm_wrapper
                 _disposed = true;
             }
         }
+
+        // Add these methods to the EcMaster class
+
+        /// <summary>
+        /// Request a specific AL state for a slave by position
+        /// </summary>
+        /// <param name="slavePosition">Position of the slave</param>
+        /// <param name="state">The desired AL state</param>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestSlaveState(ushort slavePosition, EcAlState state)
+        {
+            CheckDisposed();
+            return EcrtNative.ecrt_master_slave_state_request(_masterPtr, slavePosition, state);
+        }
+
+        /// <summary>
+        /// Request a slave to go to INIT state
+        /// </summary>
+        /// <param name="slavePosition">Position of the slave</param>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestSlaveInit(ushort slavePosition)
+        {
+            return RequestSlaveState(slavePosition, EcAlState.EC_AL_STATE_INIT);
+        }
+
+        /// <summary>
+        /// Request a slave to go to PREOP state
+        /// </summary>
+        /// <param name="slavePosition">Position of the slave</param>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestSlavePreOp(ushort slavePosition)
+        {
+            return RequestSlaveState(slavePosition, EcAlState.EC_AL_STATE_PREOP);
+        }
+
+        /// <summary>
+        /// Request a slave to go to SAFEOP state
+        /// </summary>
+        /// <param name="slavePosition">Position of the slave</param>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestSlaveSafeOp(ushort slavePosition)
+        {
+            return RequestSlaveState(slavePosition, EcAlState.EC_AL_STATE_SAFEOP);
+        }
+
+        /// <summary>
+        /// Request a slave to go to OP state
+        /// </summary>
+        /// <param name="slavePosition">Position of the slave</param>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestSlaveOp(ushort slavePosition)
+        {
+            return RequestSlaveState(slavePosition, EcAlState.EC_AL_STATE_OP);
+        }
+
+        /// <summary>
+        /// Wait for a slave to reach a specific state with timeout
+        /// </summary>
+        /// <param name="slavePosition">Position of the slave</param>
+        /// <param name="targetState">The state to wait for</param>
+        /// <param name="timeoutMs">Timeout in milliseconds</param>
+        /// <returns>True if state reached, false if timeout</returns>
+        public bool WaitForSlaveState(ushort slavePosition, EcAlState targetState, uint timeoutMs = 5000)
+        {
+            var startTime = DateTime.UtcNow;
+            var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+
+            while (DateTime.UtcNow - startTime < timeout)
+            {
+                try
+                {
+                    var slaveInfo = GetSlaveInfo(slavePosition);
+                    if ((EcAlState)slaveInfo.al_state == targetState)
+                        return true;
+                }
+                catch
+                {
+                    // Continue trying if slave info read fails
+                }
+
+                System.Threading.Thread.Sleep(10); // Small delay to avoid busy waiting
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Request slave state change and wait for completion
+        /// </summary>
+        /// <param name="slavePosition">Position of the slave</param>
+        /// <param name="state">The desired AL state</param>
+        /// <param name="timeoutMs">Timeout in milliseconds</param>
+        /// <returns>True if successful, false if failed or timeout</returns>
+        public bool RequestSlaveStateAndWait(ushort slavePosition, EcAlState state, uint timeoutMs = 5000)
+        {
+            var result = RequestSlaveState(slavePosition, state);
+            if (result != 0)
+                return false;
+
+            return WaitForSlaveState(slavePosition, state, timeoutMs);
+        }
+
+        /// <summary>
+        /// Request all slaves to go to a specific state
+        /// </summary>
+        /// <param name="state">The desired AL state</param>
+        /// <returns>Number of slaves that successfully changed state</returns>
+        public int RequestAllSlavesState(EcAlState state)
+        {
+            CheckDisposed();
+            var masterInfo = GetInfo();
+            int successCount = 0;
+
+            for (ushort i = 0; i < masterInfo.slave_count; i++)
+            {
+                try
+                {
+                    if (RequestSlaveState(i, state) == 0)
+                        successCount++;
+                }
+                catch
+                {
+                    // Continue with next slave if one fails
+                }
+            }
+
+            return successCount;
+        }
+
+        /// <summary>
+        /// Request all slaves to go to OP state
+        /// </summary>
+        /// <returns>Number of slaves that successfully changed to OP state</returns>
+        public int RequestAllSlavesOp()
+        {
+            return RequestAllSlavesState(EcAlState.EC_AL_STATE_OP);
+        }
+
+        /// <summary>
+        /// Request all slaves to go to INIT state
+        /// </summary>
+        /// <returns>Number of slaves that successfully changed to INIT state</returns>
+        public int RequestAllSlavesInit()
+        {
+            return RequestAllSlavesState(EcAlState.EC_AL_STATE_INIT);
+        }
     }
 
     /// <summary>
@@ -830,7 +1001,7 @@ namespace ecm_wrapper
                 // Add terminator
                 var terminator = new EcPdoEntryReg { index = 0 };
                 Marshal.StructureToPtr(terminator, arrayPtr + registrations.Length * size, false);
-                
+
                 return EcrtNative.ecrt_domain_reg_pdo_entry_list(_domainPtr, arrayPtr);
             }
             finally
@@ -1102,6 +1273,97 @@ namespace ecm_wrapper
         {
             return EcrtNative.ecrt_slave_config_state_timeout(_configPtr, fromState, toState, timeoutMs);
         }
+
+        /// <summary>
+        /// Request a specific AL state for this slave
+        /// </summary>
+        /// <param name="state">The desired AL state</param>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestState(EcAlState state)
+        {
+            return EcrtNative.ecrt_slave_config_state_request(_configPtr, state);
+        }
+
+        /// <summary>
+        /// Request the slave to go to INIT state
+        /// </summary>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestInit()
+        {
+            return RequestState(EcAlState.EC_AL_STATE_INIT);
+        }
+
+        /// <summary>
+        /// Request the slave to go to PREOP state
+        /// </summary>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestPreOp()
+        {
+            return RequestState(EcAlState.EC_AL_STATE_PREOP);
+        }
+
+        /// <summary>
+        /// Request the slave to go to SAFEOP state
+        /// </summary>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestSafeOp()
+        {
+            return RequestState(EcAlState.EC_AL_STATE_SAFEOP);
+        }
+
+        /// <summary>
+        /// Request the slave to go to OP state
+        /// </summary>
+        /// <returns>0 on success, negative error code on failure</returns>
+        public int RequestOp()
+        {
+            return RequestState(EcAlState.EC_AL_STATE_OP);
+        }
+
+        /// <summary>
+        /// Wait for the slave to reach a specific state with timeout
+        /// </summary>
+        /// <param name="targetState">The state to wait for</param>
+        /// <param name="timeoutMs">Timeout in milliseconds</param>
+        /// <returns>True if state reached, false if timeout</returns>
+        public bool WaitForState(EcAlState targetState, uint timeoutMs = 5000)
+        {
+            var startTime = DateTime.UtcNow;
+            var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+
+            while (DateTime.UtcNow - startTime < timeout)
+            {
+                try
+                {
+                    var currentState = GetState();
+                    if ((EcAlState)currentState.al_state == targetState)
+                        return true;
+                }
+                catch
+                {
+                    // Continue trying if state read fails
+                }
+
+                System.Threading.Thread.Sleep(10); // Small delay to avoid busy waiting
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Request state change and wait for completion
+        /// </summary>
+        /// <param name="state">The desired AL state</param>
+        /// <param name="timeoutMs">Timeout in milliseconds</param>
+        /// <returns>True if successful, false if failed or timeout</returns>
+        public bool RequestStateAndWait(EcAlState state, uint timeoutMs = 5000)
+        {
+            var result = RequestState(state);
+            if (result != 0)
+                return false;
+
+            return WaitForState(state, timeoutMs);
+        }
     }
 
     /// <summary>
@@ -1323,59 +1585,59 @@ namespace ecm_wrapper
         // Read methods
         public static byte ReadU8(IntPtr data) => Marshal.ReadByte(data);
         public static sbyte ReadS8(IntPtr data) => (sbyte)Marshal.ReadByte(data);
-        
+
         public static ushort ReadU16(IntPtr data)
         {
             var bytes = new byte[2];
             Marshal.Copy(data, bytes, 0, 2);
             return BitConverter.ToUInt16(bytes, 0);
         }
-        
+
         public static short ReadS16(IntPtr data)
         {
             var bytes = new byte[2];
             Marshal.Copy(data, bytes, 0, 2);
             return BitConverter.ToInt16(bytes, 0);
         }
-        
+
         public static uint ReadU32(IntPtr data)
         {
             var bytes = new byte[4];
             Marshal.Copy(data, bytes, 0, 4);
             return BitConverter.ToUInt32(bytes, 0);
         }
-        
+
         public static int ReadS32(IntPtr data)
         {
             var bytes = new byte[4];
             Marshal.Copy(data, bytes, 0, 4);
             return BitConverter.ToInt32(bytes, 0);
         }
-        
+
         public static ulong ReadU64(IntPtr data)
         {
             var bytes = new byte[8];
             Marshal.Copy(data, bytes, 0, 8);
             return BitConverter.ToUInt64(bytes, 0);
         }
-        
+
         public static long ReadS64(IntPtr data)
         {
             var bytes = new byte[8];
             Marshal.Copy(data, bytes, 0, 8);
             return BitConverter.ToInt64(bytes, 0);
         }
-        
+
         public static float ReadReal(IntPtr data)
         {
             return EcrtNative.ecrt_read_real(data);
         }
-        
+
         public static double ReadLReal(IntPtr data)
         {
             return EcrtNative.ecrt_read_lreal(data);
         }
-        
+
         public static bool ReadBit(IntPtr data, int position)
         {
             var byteValue = Marshal.ReadByte(data);
@@ -1387,58 +1649,58 @@ namespace ecm_wrapper
         {
             Marshal.WriteByte(data, value);
         }
-        
+
         public static void WriteS8(IntPtr data, sbyte value)
         {
             Marshal.WriteByte(data, (byte)value);
         }
-        
+
         public static void WriteU16(IntPtr data, ushort value)
         {
             var bytes = BitConverter.GetBytes(value);
             Marshal.Copy(bytes, 0, data, 2);
         }
-        
+
         public static void WriteS16(IntPtr data, short value)
         {
             var bytes = BitConverter.GetBytes(value);
             Marshal.Copy(bytes, 0, data, 2);
         }
-        
+
         public static void WriteU32(IntPtr data, uint value)
         {
             var bytes = BitConverter.GetBytes(value);
             Marshal.Copy(bytes, 0, data, 4);
         }
-        
+
         public static void WriteS32(IntPtr data, int value)
         {
             var bytes = BitConverter.GetBytes(value);
             Marshal.Copy(bytes, 0, data, 4);
         }
-        
+
         public static void WriteU64(IntPtr data, ulong value)
         {
             var bytes = BitConverter.GetBytes(value);
             Marshal.Copy(bytes, 0, data, 8);
         }
-        
+
         public static void WriteS64(IntPtr data, long value)
         {
             var bytes = BitConverter.GetBytes(value);
             Marshal.Copy(bytes, 0, data, 8);
         }
-        
+
         public static void WriteReal(IntPtr data, float value)
         {
             EcrtNative.ecrt_write_real(data, value);
         }
-        
+
         public static void WriteLReal(IntPtr data, double value)
         {
             EcrtNative.ecrt_write_lreal(data, value);
         }
-        
+
         public static void WriteBit(IntPtr data, int position, bool value)
         {
             var byteValue = Marshal.ReadByte(data);
@@ -1456,7 +1718,7 @@ namespace ecm_wrapper
             Marshal.Copy(data, bytes, 0, length);
             return bytes;
         }
-        
+
         public static ushort[] ReadU16Array(IntPtr data, int count)
         {
             var result = new ushort[count];
@@ -1466,7 +1728,7 @@ namespace ecm_wrapper
             }
             return result;
         }
-        
+
         public static uint[] ReadU32Array(IntPtr data, int count)
         {
             var result = new uint[count];
@@ -1482,7 +1744,7 @@ namespace ecm_wrapper
         {
             Marshal.Copy(values, 0, data, values.Length);
         }
-        
+
         public static void WriteU16Array(IntPtr data, ushort[] values)
         {
             for (int i = 0; i < values.Length; i++)
@@ -1490,7 +1752,7 @@ namespace ecm_wrapper
                 WriteU16(data + i * 2, values[i]);
             }
         }
-        
+
         public static void WriteU32Array(IntPtr data, uint[] values)
         {
             for (int i = 0; i < values.Length; i++)
@@ -1549,7 +1811,7 @@ namespace ecm_wrapper
             return this;
         }
 
-        public PdoConfigurationBuilder AddSyncManager(byte index, EcDirection direction, 
+        public PdoConfigurationBuilder AddSyncManager(byte index, EcDirection direction,
             EcPdoInfo[] pdos = null, EcWatchdogMode watchdogMode = EcWatchdogMode.EC_WD_DEFAULT)
         {
             var pdosPtr = IntPtr.Zero;
@@ -1763,7 +2025,7 @@ namespace ecm_wrapper
         public byte Subindex { get; }
         public uint AbortCode { get; }
 
-        public EtherCatSdoException(string message, ushort slavePosition, ushort index, byte subindex, uint abortCode) 
+        public EtherCatSdoException(string message, ushort slavePosition, ushort index, byte subindex, uint abortCode)
             : base(message, slavePosition)
         {
             Index = index;
@@ -1813,7 +2075,7 @@ namespace ecm_wrapper
     /// </summary>
     public static class EcrtAsync
     {
-        public static async Task<byte[]> SdoUploadAsync(EcMaster master, ushort slavePosition, 
+        public static async Task<byte[]> SdoUploadAsync(EcMaster master, ushort slavePosition,
             ushort index, byte subindex, int bufferSize = 1024, CancellationToken cancellationToken = default)
         {
             return await Task.Run(() =>
@@ -1821,38 +2083,38 @@ namespace ecm_wrapper
                 var buffer = new byte[bufferSize];
                 uint abortCode;
                 var result = master.SdoUpload(slavePosition, index, subindex, buffer, out int resultSize, out abortCode);
-                
+
                 if (result != 0)
                     throw new EtherCatSdoException($"SDO upload failed: {result}", slavePosition, index, subindex, abortCode);
-                
+
                 var data = new byte[resultSize];
                 Array.Copy(buffer, data, resultSize);
                 return data;
             }, cancellationToken);
         }
 
-        public static async Task SdoDownloadAsync(EcMaster master, ushort slavePosition, 
+        public static async Task SdoDownloadAsync(EcMaster master, ushort slavePosition,
             ushort index, byte subindex, byte[] data, CancellationToken cancellationToken = default)
         {
             await Task.Run(() =>
             {
                 uint abortCode;
                 var result = master.SdoDownload(slavePosition, index, subindex, data, out abortCode);
-                
+
                 if (result != 0)
                     throw new EtherCatSdoException($"SDO download failed: {result}", slavePosition, index, subindex, abortCode);
             }, cancellationToken);
         }
 
-        public static async Task<T> WaitForRequestAsync<T>(Func<EcRequestState> getState, 
+        public static async Task<T> WaitForRequestAsync<T>(Func<EcRequestState> getState,
             Func<T> getResult, TimeSpan timeout, CancellationToken cancellationToken = default)
         {
             var startTime = DateTime.UtcNow;
-            
+
             while (DateTime.UtcNow - startTime < timeout)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                
+
                 var state = getState();
                 switch (state)
                 {
@@ -1867,9 +2129,111 @@ namespace ecm_wrapper
                         throw new EtherCatException("Request not started");
                 }
             }
-            
+
             throw new TimeoutException("Request timed out");
         }
+
+        /// <summary>
+        /// Asynchronously request a slave state change and wait for completion
+        /// </summary>
+        public static async Task<bool> RequestSlaveStateAsync(EcMaster master, ushort slavePosition, 
+            EcAlState state, uint timeoutMs = 5000, CancellationToken cancellationToken = default)
+        {
+            return await Task.Run(() =>
+            {
+                var result = master.RequestSlaveState(slavePosition, state);
+                if (result != 0)
+                    return false;
+
+                return master.WaitForSlaveState(slavePosition, state, timeoutMs);
+            }, cancellationToken);
+        }
+
+        /// <summary>
+        /// Asynchronously request a slave config state change and wait for completion
+        /// </summary>
+        public static async Task<bool> RequestSlaveConfigStateAsync(EcSlaveConfig slaveConfig, 
+            EcAlState state, uint timeoutMs = 5000, CancellationToken cancellationToken = default)
+        {
+            return await Task.Run(() =>
+            {
+                return slaveConfig.RequestStateAndWait(state, timeoutMs);
+            }, cancellationToken);
+        }
+
+        // Add to the EcrtConfigHelper class for common state transition patterns
+
+        /// <summary>
+        /// Perform a complete slave startup sequence: INIT -> PREOP -> SAFEOP -> OP
+        /// </summary>
+        /// <param name="slaveConfig">The slave configuration</param>
+        /// <param name="timeoutMs">Timeout for each state transition</param>
+        /// <returns>True if all transitions successful</returns>
+        public static bool StartupSlave(EcSlaveConfig slaveConfig, uint timeoutMs = 5000)
+        {
+            // INIT -> PREOP
+            if (!slaveConfig.RequestStateAndWait(EcAlState.EC_AL_STATE_PREOP, timeoutMs))
+                return false;
+
+            // PREOP -> SAFEOP
+            if (!slaveConfig.RequestStateAndWait(EcAlState.EC_AL_STATE_SAFEOP, timeoutMs))
+                return false;
+
+            // SAFEOP -> OP
+            return slaveConfig.RequestStateAndWait(EcAlState.EC_AL_STATE_OP, timeoutMs);
+        }
+
+        /// <summary>
+        /// Perform a complete slave shutdown sequence: OP -> SAFEOP -> PREOP -> INIT
+        /// </summary>
+        /// <param name="slaveConfig">The slave configuration</param>
+        /// <param name="timeoutMs">Timeout for each state transition</param>
+        /// <returns>True if all transitions successful</returns>
+        public static bool ShutdownSlave(EcSlaveConfig slaveConfig, uint timeoutMs = 5000)
+        {
+            // OP -> SAFEOP
+            if (!slaveConfig.RequestStateAndWait(EcAlState.EC_AL_STATE_SAFEOP, timeoutMs))
+                return false;
+
+            // SAFEOP -> PREOP
+            if (!slaveConfig.RequestStateAndWait(EcAlState.EC_AL_STATE_PREOP, timeoutMs))
+                return false;
+
+            // PREOP -> INIT
+            return slaveConfig.RequestStateAndWait(EcAlState.EC_AL_STATE_INIT, timeoutMs);
+        }
+
+        /// <summary>
+        /// Startup all slaves in the master
+        /// </summary>
+        /// <param name="master">The EtherCAT master</param>
+        /// <param name="timeoutMs">Timeout for each state transition</param>
+        /// <returns>Number of slaves successfully started</returns>
+        public static int StartupAllSlaves(EcMaster master, uint timeoutMs = 5000)
+        {
+            var masterInfo = master.GetInfo();
+            int successCount = 0;
+
+            for (ushort i = 0; i < masterInfo.slave_count; i++)
+            {
+                try
+                {
+                    if (master.RequestSlaveStateAndWait(i, EcAlState.EC_AL_STATE_PREOP, timeoutMs) &&
+                        master.RequestSlaveStateAndWait(i, EcAlState.EC_AL_STATE_SAFEOP, timeoutMs) &&
+                        master.RequestSlaveStateAndWait(i, EcAlState.EC_AL_STATE_OP, timeoutMs))
+                    {
+                        successCount++;
+                    }
+                }
+                catch
+                {
+                    // Continue with next slave if one fails
+                }
+            }
+
+            return successCount;
+        }
+
     }
 
     #endregion
@@ -1926,11 +2290,11 @@ namespace ecm_wrapper
             return CreateSyncConfig(3, EcDirection.EC_DIR_INPUT, pdoIndex, entryInfos);
         }
 
-        private static EcSyncInfo[] CreateSyncConfig(byte syncIndex, EcDirection direction, ushort pdoIndex, EcPdoEntryInfo[] entries)
+        public static EcSyncInfo[] CreateSyncConfig(byte syncIndex, EcDirection direction, ushort pdoIndex, EcPdoEntryInfo[] entries)
         {
             var entriesSize = Marshal.SizeOf<EcPdoEntryInfo>();
             var entriesPtr = Marshal.AllocHGlobal(entriesSize * entries.Length);
-            
+
             for (int i = 0; i < entries.Length; i++)
             {
                 Marshal.StructureToPtr(entries[i], entriesPtr + i * entriesSize, false);
@@ -1968,15 +2332,15 @@ namespace ecm_wrapper
         {
             // Common DC configuration: SYNC0 enabled, SYNC1 disabled
             const ushort ASSIGN_ACTIVATE = 0x0300; // Enable SYNC0
-            
+
             var result = slaveConfig.ConfigureDistributedClocks(
-                ASSIGN_ACTIVATE, 
-                cycleTimeNs, 
-                shiftTimeNs, 
+                ASSIGN_ACTIVATE,
+                cycleTimeNs,
+                shiftTimeNs,
                 0, // SYNC1 cycle time (disabled)
                 0  // SYNC1 shift time
             );
-            
+
             if (result != 0)
                 throw new EtherCatException($"Failed to configure distributed clocks: {result}");
         }
@@ -1984,7 +2348,7 @@ namespace ecm_wrapper
         /// <summary>
         /// Configure common EoE (Ethernet over EtherCAT) settings
         /// </summary>
-        public static void ConfigureEoE(EcSlaveConfig slaveConfig, string ipAddress, string subnetMask, 
+        public static void ConfigureEoE(EcSlaveConfig slaveConfig, string ipAddress, string subnetMask,
             string gateway = null, string dns = null, string hostname = null, byte[] macAddress = null)
         {
             if (macAddress != null)
@@ -2104,7 +2468,95 @@ namespace ecm_wrapper
             logger($"  Sync Managers: {info.sync_count}");
             logger($"  SDOs: {info.sdo_count}");
         }
+
+        /* public SlaveInfo GetSlaveInfo(uint position)
+        {
+            // This would call ecrt_master_get_slave() from the native library
+            // and return structured information about the slave
+        }
+
+        /// <summary>
+        /// Scan the bus and return all discovered slaves
+        /// </summary>
+        public SlaveInfo[] ScanSlaves()
+        {
+            var masterState = GetState();
+            var slaves = new SlaveInfo[masterState.slaves_responding];
+
+            for (uint i = 0; i < masterState.slaves_responding; i++)
+            {
+                slaves[i] = GetSlaveInfo(i);
+            }
+
+            return slaves;
+        }        
+
+        public struct SlaveInfo
+        {
+            public uint Position;
+            public uint Alias;
+            public uint VendorId;
+            public uint ProductCode;
+            public uint RevisionNumber;
+            public uint SerialNumber;
+            public string Name;
+            public bool Online;
+            public bool Operational;
+        } */
+
+        /// <summary>
+        /// Get a summary of all slave states
+        /// </summary>
+        /// <param name="master">The EtherCAT master</param>
+        /// <returns>Dictionary mapping slave position to AL state</returns>
+        public static Dictionary<ushort, EcAlState> GetAllSlaveStates(EcMaster master)
+        {
+            var states = new Dictionary<ushort, EcAlState>();
+            var masterInfo = master.GetInfo();
+
+            for (ushort i = 0; i < masterInfo.slave_count; i++)
+            {
+                try
+                {
+                    var slaveInfo = master.GetSlaveInfo(i);
+                    states[i] = (EcAlState)slaveInfo.al_state;
+                }
+                catch
+                {
+                    states[i] = EcAlState.EC_AL_STATE_INIT; // Default to INIT if read fails
+                }
+            }
+
+            return states;
+        }
+
+        /// <summary>
+        /// Check if all slaves are in the specified state
+        /// </summary>
+        /// <param name="master">The EtherCAT master</param>
+        /// <param name="targetState">The target AL state</param>
+        /// <returns>True if all slaves are in target state</returns>
+        public static bool AllSlavesInState(EcMaster master, EcAlState targetState)
+        {
+            var states = GetAllSlaveStates(master);
+            return states.Values.All(state => state == targetState);
+        }
+
+        /// <summary>
+        /// Get count of slaves in each state
+        /// </summary>
+        /// <param name="master">The EtherCAT master</param>
+        /// <returns>Dictionary mapping AL state to count</returns>
+        public static Dictionary<EcAlState, int> GetSlaveStateCounts(EcMaster master)
+        {
+            var states = GetAllSlaveStates(master);
+            return states.Values.GroupBy(state => state)
+                            .ToDictionary(group => group.Key, group => group.Count());
+        }
     }
 
     #endregion
+    
+
+    
 }

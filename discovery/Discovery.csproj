@@ -7,8 +7,16 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\wrapper\ecm_wrapper.csproj" />
+  </ItemGroup>
+
   <PropertyGroup>
-    <ProjectReference Include="..\ecm-wrapper.csproj" />
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
 
 </Project>
